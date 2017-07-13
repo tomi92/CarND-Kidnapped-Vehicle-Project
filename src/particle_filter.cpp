@@ -32,6 +32,10 @@ double dSqr(const LandmarkObs& a, const LandmarkObs& b) {
   return sqr(b.x - a.x) + sqr(b.y - a.y);
 }
 
+double dSqr(const Particle& a, const LandmarkObs& b) {
+  return sqr(b.x - a.x) + sqr(b.y - a.y);
+}
+
 double gaussianPDF2(double mu1, double mu2, double std1, double std2, double x1,
                     double x2) {
   return exp(-0.5 * (sqr(x1 - mu1) / std1 + sqr(x2 - mu2) / std2));
@@ -74,6 +78,8 @@ LandmarkObs singleLandmarkToLandmarkObs(
   return {landmark.id_i, double(landmark.x_f), double(landmark.y_f)};
 }
 
+// Better initialize it once not at every function call
+default_random_engine random_engine;
 }  // namespace
 
 void ParticleFilter::init(double x, double y, double theta, double std[]) {
@@ -81,7 +87,6 @@ void ParticleFilter::init(double x, double y, double theta, double std[]) {
 
   weights = std::vector<double>(num_particles, 1.0);
 
-  default_random_engine random_engine;  // TODO when to seed?
   double std_x = std[0];
   double std_y = std[1];
   double std_theta = std[2];
@@ -101,7 +106,6 @@ void ParticleFilter::init(double x, double y, double theta, double std[]) {
 
 void ParticleFilter::prediction(double delta_t, double std_pos[],
                                 double velocity, double yaw_rate) {
-  default_random_engine random_engine;  // TODO when to seed?
   double std_x = std_pos[0];
   double std_y = std_pos[1];
   double std_theta = std_pos[2];
@@ -119,7 +123,7 @@ void ParticleFilter::prediction(double delta_t, double std_pos[],
     double new_x, new_y, new_theta;
 
     if (yaw_rate < 0.001) {
-      new_x = p.x + velocity * cos(p.theta) * delta_t;  // TODO check
+      new_x = p.x + velocity * cos(p.theta) * delta_t;
       new_y = p.y + velocity * sin(p.theta) * delta_t;
       new_theta = p.theta;
     } else {
@@ -158,7 +162,9 @@ void ParticleFilter::dataAssociation(std::vector<LandmarkObs> predicted,
 void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
                                    std::vector<LandmarkObs> observations,
                                    Map map_landmarks) {
-  // TODO use sensor_range
+  assert(!map_landmarks.landmark_list.empty());
+
+  double sqr_range = sqr(sensor_range * 1.1);
   vector<LandmarkObs> map_predictions(map_landmarks.landmark_list.size());
   transform(map_landmarks.landmark_list.begin(),
             map_landmarks.landmark_list.end(), map_predictions.begin(),
@@ -166,10 +172,34 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
   vector<LandmarkObs> map_observations(observations.size());
   int i = 0;
   for (Particle& particle : particles) {
+    vector<LandmarkObs> map_predictions_in_range;
+    for (const LandmarkObs& map_prediction : map_predictions) {
+      if (dSqr(particle, map_prediction) < sqr_range) {
+        map_predictions_in_range.push_back(map_prediction);
+      }
+    }
+    if (map_predictions_in_range.empty()) {
+      map_predictions_in_range = map_predictions;
+    }
+
     transform(
         observations.begin(), observations.end(), map_observations.begin(),
         bind(convertObservationToMapCoordinates, particle, placeholders::_1));
-    dataAssociation(map_predictions, map_observations);
+    dataAssociation(map_predictions_in_range, map_observations);
+
+    // DEBUG
+    vector<int> associations(map_observations.size());
+    vector<double> sense_x(map_observations.size());
+    vector<double> sense_y(map_observations.size());
+    int j = 0;
+    for (LandmarkObs& map_observation : map_observations) {
+      associations[j] = map_observation.id;
+      sense_x[j] = map_observation.x;
+      sense_y[j] = map_observation.y;
+      j++;
+    }
+    particle = SetAssociations(particle, associations, sense_x, sense_y);
+
     // TODO std-t átszámítani
     particle.weight =
         gaussianPDF(map_predictions, map_observations, std_landmark);
@@ -179,7 +209,6 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 }
 
 void ParticleFilter::resample() {
-  default_random_engine random_engine;
   discrete_distribution<> dist(weights.begin(), weights.end());
 
   vector<Particle> new_particles(particles.size());
