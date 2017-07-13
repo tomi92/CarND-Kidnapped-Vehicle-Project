@@ -41,6 +41,8 @@ double gaussianPDF2(double mu1, double mu2, double std1, double std2, double x1,
   return exp(-0.5 * (sqr(x1 - mu1) / std1 + sqr(x2 - mu2) / std2));
 }
 
+// I assume std_landmark corresponds to x and y standard deviation as in
+// main.cpp, not range and bearing as in particle_filter.h
 double gaussianPDF(const vector<LandmarkObs>& predictions,
                    const vector<LandmarkObs>& observations,
                    double std_landmark[]) {
@@ -49,6 +51,8 @@ double gaussianPDF(const vector<LandmarkObs>& predictions,
   // predictions.size()
   for (const LandmarkObs& observation : observations) {
     const LandmarkObs& closestLandmark = predictions[observation.id - 1];
+    assert(closestLandmark.id == observation.id);
+
     density *=
         gaussianPDF2(closestLandmark.x, closestLandmark.y, std_landmark[0],
                      std_landmark[1], observation.x, observation.y);
@@ -83,7 +87,7 @@ default_random_engine random_engine;
 }  // namespace
 
 void ParticleFilter::init(double x, double y, double theta, double std[]) {
-  num_particles = 100;  // TODO tune
+  num_particles = 100;
 
   weights = std::vector<double>(num_particles, 1.0);
 
@@ -115,7 +119,6 @@ void ParticleFilter::prediction(double delta_t, double std_pos[],
   normal_distribution<double> dist_theta(0, std_theta);
 
   for (Particle& p : particles) {
-    // TODO nem biztos h így
     p.x += dist_x(random_engine);
     p.y += dist_x(random_engine);
     p.theta += dist_x(random_engine);
@@ -146,7 +149,6 @@ void ParticleFilter::dataAssociation(std::vector<LandmarkObs> predicted,
                                      std::vector<LandmarkObs>& observations) {
   assert(!predicted.empty());
 
-  // TODO normál for ciklussal gyorsabb
   for_each(observations.begin(), observations.end(),
            [&predicted](LandmarkObs& observation) {
              observation.id = min_element(predicted.begin(), predicted.end(),
@@ -169,22 +171,26 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
   transform(map_landmarks.landmark_list.begin(),
             map_landmarks.landmark_list.end(), map_predictions.begin(),
             singleLandmarkToLandmarkObs);
+
   vector<LandmarkObs> map_observations(observations.size());
   int i = 0;
   for (Particle& particle : particles) {
     vector<LandmarkObs> map_predictions_in_range;
+
     for (const LandmarkObs& map_prediction : map_predictions) {
       if (dSqr(particle, map_prediction) < sqr_range) {
         map_predictions_in_range.push_back(map_prediction);
       }
     }
+
     if (map_predictions_in_range.empty()) {
-      map_predictions_in_range = map_predictions;
+      map_predictions_in_range.push_back(map_predictions[0]);
     }
 
     transform(
         observations.begin(), observations.end(), map_observations.begin(),
         bind(convertObservationToMapCoordinates, particle, placeholders::_1));
+
     dataAssociation(map_predictions_in_range, map_observations);
 
     // DEBUG
@@ -200,7 +206,6 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
     }
     particle = SetAssociations(particle, associations, sense_x, sense_y);
 
-    // TODO std-t átszámítani
     particle.weight =
         gaussianPDF(map_predictions, map_observations, std_landmark);
     weights[i] = particle.weight;
